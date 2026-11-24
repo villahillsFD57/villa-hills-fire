@@ -4,7 +4,7 @@
   "compatibility_date": "2026-11-23",
   "account_id": "0328048d9ee4baa978545cb4649f11a7",
   "vars": {
-    "CAD_POLL_ENABLED": "false"
+    "CAD_POLL_ENABLED": "true"
   },
   "triggers": {
     "crons": ["* * * * *"]

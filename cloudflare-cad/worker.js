@@ -251,8 +251,11 @@ export default {
       });
       if (response.ok) console.info("CAD_SCHEDULED_POLL", { status: response.status });
       else console.error("CAD_SCHEDULED_POLL_FAILED", { status: response.status });
-    } catch {
-      console.error("CAD_SCHEDULED_POLL_FAILED", { code: "REQUEST_FAILED" });
+    } catch (error) {
+      console.error("CAD_SCHEDULED_POLL_FAILED", {
+        code: "REQUEST_FAILED",
+        detail: String(error).replaceAll(secret, "[redacted]").slice(0, 300),
+      });
     }
   },
   async fetch(request, env) {

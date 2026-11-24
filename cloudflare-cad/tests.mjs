@@ -231,7 +231,7 @@ test("scheduler records only status for HTTP failures without reading private er
   assert.deepEqual(error.mock.calls.map(call => call.arguments), [["CAD_SCHEDULED_POLL_FAILED", { status: 503 }]]);
 });
 
-test("scheduler sanitizes network exceptions and never logs headers or credentials", async t => {
+test("scheduler reports exception diagnostics with its credential redacted", async t => {
   t.mock.method(globalThis, "fetch", async () => {
     throw new Error(`private upstream content and credential ${TOKEN}`);
   });
@@ -239,7 +239,7 @@ test("scheduler sanitizes network exceptions and never logs headers or credentia
   const error = t.mock.method(console, "error", () => {});
   await worker.scheduled({}, scheduledEnvironment());
   assert.equal(info.mock.callCount(), 0);
-  assert.deepEqual(error.mock.calls.map(call => call.arguments), [["CAD_SCHEDULED_POLL_FAILED", { code: "REQUEST_FAILED" }]]);
+  assert.deepEqual(error.mock.calls.map(call => call.arguments), [["CAD_SCHEDULED_POLL_FAILED", { code: "REQUEST_FAILED", detail: "Error: private upstream content and credential [redacted]" }]]);
 });
 
 test("scheduler rejects missing and invalid secrets without network or database requests", async t => {
@@ -273,4 +273,19 @@ test("scheduler treats redirects as failures and never forwards the bearer token
   assert.equal(fetchMock.mock.callCount(), 1, "No request may be made to the redirect destination");
   assert.equal(info.mock.callCount(), 0);
   assert.deepEqual(error.mock.calls.map(call => call.arguments), [["CAD_SCHEDULED_POLL_FAILED", { status: 302 }]]);
+});
+
+
+test("scheduler bounds exception diagnostics to 300 characters after redacting every token occurrence", async t => {
+  t.mock.method(globalThis, "fetch", async () => {
+    throw new Error(`${TOKEN} ${TOKEN} ${"upstream-diagnostic ".repeat(100)}`);
+  });
+  const error = t.mock.method(console, "error", () => {});
+  await worker.scheduled({}, scheduledEnvironment());
+  const [event, diagnostic] = error.mock.calls[0].arguments;
+  assert.equal(event, "CAD_SCHEDULED_POLL_FAILED");
+  assert.equal(diagnostic.code, "REQUEST_FAILED");
+  assert.equal(diagnostic.detail.length, 300);
+  assert.match(diagnostic.detail, /^Error: \[redacted\] \[redacted\] /);
+  assert.equal(diagnostic.detail.includes(TOKEN), false);
 });
