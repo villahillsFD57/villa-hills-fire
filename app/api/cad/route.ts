@@ -1,44 +1,29 @@
 import { NextResponse } from "next/server";
-import { neon } from "@neondatabase/serverless";
+import { getCachedCadSummary } from "@/lib/cad/public-cache";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// Called by StatusBar every 60 seconds — reads from DB, not Gmail directly
+/** Compatibility endpoint for older installed StatusBar clients. */
 export async function GET() {
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    return NextResponse.json({ incident: null });
-  }
-
-  const sql = neon(dbUrl);
-
   try {
-    const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-
-    const rows = await sql`
-      SELECT call_type, location, units, received_at
-      FROM incidents
-      WHERE received_at > ${cutoff}
-      ORDER BY received_at DESC
-      LIMIT 1
-    `;
-
-    if (rows.length === 0) {
-      return NextResponse.json({ incident: null });
-    }
-
-    const row = rows[0];
+    // Reuse the same shared snapshot as the current ticker. Old clients must not
+    // keep a separate database query running every minute against incidents.
+    const { latest } = await getCachedCadSummary();
+    const age = latest ? Date.now() - new Date(latest.dispatchDatetime).getTime() : NaN;
+    const active = Number.isFinite(age) && age >= 0 && age < 2 * 60 * 60 * 1000;
     return NextResponse.json({
-      incident: {
-        type: row.call_type,
-        location: row.location,
-        units: row.units,
-        receivedAt: row.received_at,
-      },
+      incident: latest && active ? {
+        type: latest.dispatchNature,
+        receivedAt: latest.dispatchDatetime,
+        location: null,
+        units: null,
+      } : null,
+    }, { headers: { "Cache-Control": "no-store" } });
+  } catch {
+    console.error("CAD_PUBLIC_READ_FAILED", { endpoint: "legacy" });
+    return NextResponse.json({ error: "Dispatch updates are temporarily unavailable." }, {
+      status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "30" },
     });
-  } catch (err) {
-    console.error("CAD read error:", err);
-    return NextResponse.json({ incident: null });
   }
 }

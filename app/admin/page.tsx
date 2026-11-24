@@ -4,12 +4,31 @@ import { useEffect, useState } from "react";
 
 export default function AdminDashboard() {
   const [callCount, setCallCount] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [countIncomplete, setCountIncomplete] = useState(false);
 
   useEffect(() => {
-    fetch("/api/cad/log")
-      .then(r => r.json())
-      .then(calls => setCallCount(Array.isArray(calls) ? calls.length : 0))
-      .catch(() => setCallCount(0));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    let active = true;
+    fetch("/api/cad/summary", { cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error("Call summary unavailable");
+        const summary = await response.json();
+        if (!summary || (summary.count !== null && (!Number.isInteger(summary.count) || summary.count < 0))
+          || typeof summary.updatedAt !== "string" || !Number.isFinite(Date.parse(summary.updatedAt))
+          || Date.now() - Date.parse(summary.updatedAt) > 65 * 60 * 1000) {
+          throw new Error("Call summary unavailable");
+        }
+        if (active) {
+          const complete = summary.countComplete === true && summary.count !== null;
+          setCallCount(complete ? summary.count : null);
+          setCountIncomplete(!complete);
+        }
+      })
+      .catch(() => { if (active) setLoadError(true); })
+      .finally(() => clearTimeout(timeout));
+    return () => { active = false; clearTimeout(timeout); controller.abort(); };
   }, []);
 
   return (
@@ -39,6 +58,8 @@ export default function AdminDashboard() {
             {callCount !== null ? callCount : "\u2014"}
             <span className="text-gray-600 text-sm font-normal ml-2">calls this year</span>
           </div>
+          {countIncomplete && !loadError && <p role="status" className="text-amber-400 text-xs mt-2">Annual total unavailable. Earlier call records are incomplete.</p>}
+          {loadError && <p role="status" className="text-amber-400 text-xs mt-2">Call count unavailable. Open the call log to retry.</p>}
         </a>
       </div>
     </div>

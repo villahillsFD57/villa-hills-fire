@@ -4,16 +4,19 @@
  */
 
 import { NextResponse } from "next/server";
-import { getLatestCalls } from "@/lib/cad/db";
+import { getCachedCadSnapshot } from "@/lib/cad/public-cache";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
   try {
-    const calls = await getLatestCalls(10);
-    return NextResponse.json(calls);
+    const snapshot = await getCachedCadSnapshot();
+    return NextResponse.json(snapshot.latest, { headers: { "Cache-Control": "no-store" } });
   } catch {
-    return NextResponse.json([]);
+    console.error("CAD_PUBLIC_READ_FAILED", { endpoint: "latest" });
+    return NextResponse.json({ error: "Dispatch updates are temporarily unavailable." }, {
+      status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "30" },
+    });
   }
 }

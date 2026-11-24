@@ -1,16 +1,9 @@
 /**
- * GET / POST /api/cad-poll
- *
- * Cloned from millstadt-ems's /api/cad/poll. Triggered by cron-job.org every
- * minute. Also callable manually with the correct secret for testing.
- *
- * Auth: accepts a Bearer token, an `?token=` query param, or the
- * x-vercel-cron-signature header (sent by Vercel Cron). If CRON_SECRET is
- * not set in env, all requests are accepted (open endpoint).
+ * Gmail dispatch poll. Empty runs never query storage. Messages receive a
+ * processing label only after durable storage or an intentional rejection.
  */
-
 import { NextRequest, NextResponse } from "next/server";
-import { fetchUnreadDispatchEmails, markAsRead } from "@/lib/cad/gmail";
+import { fetchDispatchBatch, markAsRead } from "@/lib/cad/gmail";
 import { parseDispatchEmail } from "@/lib/cad/parser";
 import { isDuplicate, saveCall, logPollRun } from "@/lib/cad/db";
 
@@ -19,29 +12,20 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 60;
 
-export async function GET(req: NextRequest) {
-  return handlePoll(req);
-}
-export async function POST(req: NextRequest) {
-  return handlePoll(req);
-}
+export async function GET(req: NextRequest) { return handlePoll(req); }
+export async function POST(req: NextRequest) { return handlePoll(req); }
 
 function isAuthorized(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // open endpoint when not configured
-
-  // Vercel Cron sends this header automatically
-  const cronSig = req.headers.get("x-vercel-cron-signature");
-  if (cronSig) return true;
-
-  // Manual trigger with bearer token
-  const auth = req.headers.get("authorization") ?? "";
-  if (auth === `Bearer ${secret}`) return true;
-
-  // Query parameter auth (cron-job.org)
-  const qsSecret = req.nextUrl.searchParams.get("token")
+  const secret = process.env.CRON_SECRET ?? process.env.CAD_STORE_TOKEN;
+  // D1's private token authenticates the managed Cloudflare scheduler. Keep
+  // legacy compatibility only before either server-side secret is configured.
+  if (!secret) return true;
+  if (req.headers.get("authorization") === `Bearer ${secret}`) return true;
+  const supplied = req.nextUrl.searchParams.get("token")
     ?? req.nextUrl.searchParams.get("secret");
-  return qsSecret === secret;
+  // Vercel Cron uses Authorization: Bearer CRON_SECRET. An arbitrary
+  // x-vercel-cron-signature header is not proof of authentication.
+  return supplied === secret;
 }
 
 async function handlePoll(req: NextRequest): Promise<NextResponse> {
@@ -50,36 +34,62 @@ async function handlePoll(req: NextRequest): Promise<NextResponse> {
   }
 
   const startedAt = Date.now();
+  const deadline = startedAt + 45_000;
+  const databaseDeadline = AbortSignal.timeout(45_000);
   const results = {
-    processed: 0,
-    duplicates: 0,
-    skipped: 0,
-    failed: 0,
+    processed: 0, duplicates: 0, skipped: 0, failed: 0, deferred: 0,
     errors: [] as string[],
   };
+  let examined = 0;
+
+  async function acknowledge(id: string) {
+    try {
+      await markAsRead(id);
+    } catch {
+      // Stored dispatches remain safe: the unique Gmail ID deduplicates a retry.
+      results.failed++;
+      results.errors.push("GMAIL_ACKNOWLEDGEMENT_FAILED");
+    }
+  }
 
   try {
-    const emails = await fetchUnreadDispatchEmails();
+    const batch = await fetchDispatchBatch();
+    examined = batch.emails.length + batch.failures.length;
+    for (const failure of batch.failures) {
+      if (failure.code === "UNTRUSTED_SENDER") {
+        if (Date.now() >= deadline) {
+          results.deferred++;
+          continue;
+        }
+        results.skipped++;
+        // A verified search false-positive is intentionally rejected. Advance
+        // the processing checkpoint so it cannot permanently fill every batch.
+        await acknowledge(failure.id);
+      } else {
+        results.failed++;
+        results.errors.push(failure.code);
+      }
+    }
 
-    for (const email of emails) {
+    for (let index = 0; index < batch.emails.length; index++) {
+      if (Date.now() >= deadline) {
+        results.deferred += batch.emails.length - index;
+        break; // Leave messages unacknowledged for the next scheduled run.
+      }
+      const email = batch.emails[index];
+      const parsed = parseDispatchEmail(email.subject, email.body, email.received);
+      if (parsed.status === "failed") {
+        results.skipped++;
+        await acknowledge(email.id);
+        continue; // Rejected mail never wakes the database.
+      }
+
       try {
-        // Dedup by Gmail message id
-        if (await isDuplicate(email.id)) {
+        if (await isDuplicate(email.id, databaseDeadline)) {
           results.duplicates++;
-          await markAsRead(email.id).catch(() => {});
+          await acknowledge(email.id);
           continue;
         }
-
-        const parsed = parseDispatchEmail(email.subject, email.body, email.received);
-
-        if (parsed.status === "failed") {
-          // Not a real CAD dispatch (newsletter, status update, etc.) —
-          // mark as read so we don't re-evaluate it forever.
-          results.skipped++;
-          await markAsRead(email.id).catch(() => {});
-          continue;
-        }
-
         await saveCall({
           gmailMessageId: email.id,
           dispatchDatetime: parsed.dispatchDatetime,
@@ -87,33 +97,45 @@ async function handlePoll(req: NextRequest): Promise<NextResponse> {
           dispatchTime: parsed.dispatchTime,
           dispatchNature: parsed.dispatchNature,
           sourceYear: parsed.sourceYear,
-        });
+        }, databaseDeadline);
         results.processed++;
-
-        await markAsRead(email.id).catch(() => {});
-      } catch (err) {
-        results.errors.push(`${email.id}: ${String(err).slice(0, 200)}`);
+        await acknowledge(email.id);
+      } catch {
         results.failed++;
-        await markAsRead(email.id).catch(() => {});
+        results.errors.push("CAD_DATABASE_WRITE_FAILED");
+        // A quota pause or transient DB failure affects every remaining item.
+        // Stop hammering it; do not acknowledge any of those messages.
+        results.deferred += batch.emails.length - index - 1;
+        break;
       }
     }
 
-    await logPollRun({
-      checked: emails.length,
-      stored: results.processed,
-      durationMs: Date.now() - startedAt,
-      error: results.errors.length ? results.errors.join("; ").slice(0, 500) : undefined,
-    });
+    // Record successful ingestion events only, never empty polling heartbeats.
+    // Empty successes and failures use hosting logs, never a DB health probe.
+    if (results.processed > 0 && results.failed === 0 && Date.now() < deadline) {
+      await logPollRun({
+        checked: examined, stored: results.processed,
+        durationMs: Date.now() - startedAt,
+      });
+    }
 
-    return NextResponse.json({ ok: true, ...results, examined: emails.length });
-  } catch (err) {
-    const detail = String(err).slice(0, 500);
-    await logPollRun({
-      checked: 0,
-      stored: results.processed,
-      durationMs: Date.now() - startedAt,
-      error: detail,
+    const ok = results.failed === 0 && results.deferred === 0;
+    const report = { ok, ...results, examined, durationMs: Date.now() - startedAt };
+    if (ok) console.info("CAD_POLL", report);
+    else console.error("CAD_POLL_INCOMPLETE", report);
+    return NextResponse.json(report, {
+      status: ok ? 200 : 503,
+      headers: { "Cache-Control": "no-store", ...(ok ? {} : { "Retry-After": "60" }) },
     });
-    return NextResponse.json({ error: "Poll failed", detail: detail.slice(0, 200) }, { status: 500 });
+  } catch (error) {
+    // Keep credentials, message bodies and database URLs out of logs/responses.
+    const message = error && typeof error === "object" && "message" in error
+      ? String(error.message) : "";
+    const code = /^(?:GMAIL_(?:AUTH_REVOKED|CREDENTIALS_MISSING|TIMEOUT|REQUEST_FAILED)|GMAIL_HTTP_[45]\d{2})$/.test(message)
+      ? message : "GMAIL_REQUEST_FAILED";
+    console.error("CAD_POLL_FETCH_FAILED", { code, durationMs: Date.now() - startedAt });
+    return NextResponse.json({ ok: false, code, error: "Dispatch sync is temporarily unavailable." }, {
+      status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "60" },
+    });
   }
 }

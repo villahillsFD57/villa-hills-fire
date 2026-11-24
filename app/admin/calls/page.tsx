@@ -107,6 +107,9 @@ const lbl = "block text-gray-300 text-xs font-semibold mb-1.5 uppercase tracking
 export default function CallsAdmin() {
   const [calls, setCalls]     = useState<Call[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [annualCount, setAnnualCount] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving]   = useState(false);
@@ -117,8 +120,37 @@ export default function CallsAdmin() {
   const [sendingTest, setSendingTest] = useState(false);
 
   async function load() {
-    const r = await fetch("/api/cad/log");
-    setCalls(await r.json()); setLoading(false);
+    setLoading(true);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const summaryPromise = fetch("/api/cad/summary", { cache: "no-store", signal: controller.signal })
+        .then(async response => {
+          if (!response.ok) return null;
+          const summary = await response.json();
+          return summary?.countComplete === true && Number.isInteger(summary.count) && summary.count >= 0
+            && typeof summary.updatedAt === "string" && Number.isFinite(Date.parse(summary.updatedAt))
+            && Date.now() - Date.parse(summary.updatedAt) <= 65 * 60 * 1000 ? summary.count as number : null;
+        }).catch(() => null);
+      const response = await fetch("/api/cad/log", { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("Call log unavailable");
+      const data: unknown = await response.json();
+      if (!Array.isArray(data) || !data.every(call => call && typeof call === "object"
+        && ["id", "dispatchDate", "dispatchTime", "dispatchNature"].every(key => typeof call[key] === "string"))) {
+        throw new Error("Invalid call log");
+      }
+      setCalls(data);
+      setAnnualCount(await summaryPromise);
+      setHasLoaded(true);
+      setLoadError(false);
+    } catch {
+      // Keep the last successfully loaded list; never turn an outage into zero calls.
+      setLoadError(true);
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+      setLoading(false);
+    }
   }
   useEffect(() => { load(); }, []);
 
@@ -189,7 +221,7 @@ export default function CallsAdmin() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-black text-white">Call Log</h1>
-            <p className="text-gray-400 text-sm mt-1">{new Date().getFullYear()} &mdash; {calls.length} calls. Click the pencil to edit.</p>
+            <p className="text-gray-400 text-sm mt-1">{new Date().toLocaleDateString("en-US", { timeZone: "America/Chicago", year: "numeric" })} &mdash; {annualCount !== null ? `${annualCount} calls` : "Annual total unavailable"}. Click the pencil to edit.</p>
           </div>
           <div className="shrink-0 flex items-center gap-2">
             <button
@@ -267,8 +299,17 @@ export default function CallsAdmin() {
         </div>
       )}
 
-      {loading ? <div className="text-gray-600 text-sm py-10">Loading...</div> : calls.length === 0 ? (
-        <div className="text-center py-16 text-gray-600">No calls logged yet.</div>
+      {hasLoaded && annualCount === null && !loadError && (
+        <p role="status" className="text-amber-300 text-sm mb-4">Earlier call records may be missing. The annual total is unavailable.</p>
+      )}
+      {loadError && (
+        <div role="alert" className="border border-amber-500/30 rounded-xl p-4 mb-4 text-amber-300 text-sm">
+          Call log unavailable. {hasLoaded ? "Showing the last loaded log. " : "The number of calls could not be loaded. "}
+          <button onClick={() => void load()} disabled={loading} className="underline disabled:opacity-50">Retry</button>
+        </div>
+      )}
+      {loading && !hasLoaded ? <div className="text-gray-600 text-sm py-10">Loading...</div> : !hasLoaded ? null : calls.length === 0 ? (
+        <div className="text-center py-16 text-gray-600">{loadError ? "No entries in the last loaded log." : annualCount === null ? "No call records are currently available." : "No calls logged yet."}</div>
       ) : (
         <div className="space-y-2">
           {calls.map((c, i) => (

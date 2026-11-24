@@ -1,0 +1,19 @@
+{
+  "name": "vhfd-cad",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-23",
+  "account_id": "0328048d9ee4baa978545cb4649f11a7",
+  "vars": {
+    "CAD_POLL_ENABLED": "false"
+  },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vhfd-cad",
+      "database_id": "ed183509-300f-49fc-8bf2-50115408ff4a"
+    }
+  ]
+}

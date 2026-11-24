@@ -1,18 +1,9 @@
 /**
- * CAD Call database — Neon Postgres (serverless).
- * Simplified from Millstadt EMS: no closeout logic.
- * Calls persist indefinitely — the most recent one shows on the ticker.
+ * Ticker call storage is served by the private Cloudflare Worker + D1 database.
+ * The previous Neon database remains untouched as the historical archive.
+ * This module never falls back to Neon or sends database credentials to clients.
  */
-
-import { neon } from "@neondatabase/serverless";
-
-function sql() {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL not set");
-  return neon(url);
-}
-
-// -- Types --
+import { invalidateCadPublicCache } from "./cache-tags";
 
 export interface Call {
   id: string;
@@ -24,170 +15,121 @@ export interface Call {
   createdAt: string;
 }
 
-// -- Schema --
-
-async function ensureSchema() {
-  const db = sql();
-  await db`
-    CREATE TABLE IF NOT EXISTS cad_calls (
-      id               TEXT PRIMARY KEY,
-      gmail_message_id TEXT UNIQUE NOT NULL,
-      dispatch_datetime TIMESTAMPTZ NOT NULL,
-      dispatch_date    TEXT NOT NULL,
-      dispatch_time    TEXT NOT NULL,
-      dispatch_nature  TEXT NOT NULL,
-      source_year      INTEGER NOT NULL,
-      created_at       TIMESTAMPTZ DEFAULT NOW()
-    )
-  `;
-  await db`
-    CREATE TABLE IF NOT EXISTS cad_poll_log (
-      id          BIGSERIAL PRIMARY KEY,
-      ran_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      checked     INTEGER,
-      stored      INTEGER,
-      inbox_total INTEGER,
-      duration_ms INTEGER,
-      error       TEXT
-    )
-  `;
+export interface PublicCadSnapshot {
+  latest: Call[];
+  count: number;
+  countComplete: boolean;
+  year: number;
+  updatedAt: string;
 }
 
-export async function logPollRun(opts: {
-  checked?: number;
-  stored?: number;
-  inboxTotal?: number;
-  durationMs?: number;
-  error?: string;
-}): Promise<void> {
-  try {
-    await ensureSchema();
-    const db = sql();
-    await db`
-      INSERT INTO cad_poll_log (checked, stored, inbox_total, duration_ms, error)
-      VALUES (${opts.checked ?? null}, ${opts.stored ?? null}, ${opts.inboxTotal ?? null},
-              ${opts.durationMs ?? null}, ${opts.error ?? null})
-    `;
-  } catch {
-    // never let logging break the cron
-  }
-}
-
-export async function getPollHistory(limit = 50): Promise<Array<{
-  ranAt: string; checked: number | null; stored: number | null;
-  inboxTotal: number | null; durationMs: number | null; error: string | null;
-}>> {
-  await ensureSchema();
-  const db = sql();
-  const rows = await db`
-    SELECT ran_at, checked, stored, inbox_total, duration_ms, error
-    FROM cad_poll_log
-    ORDER BY ran_at DESC
-    LIMIT ${limit}
-  `;
-  return (rows as Record<string, unknown>[]).map(r => ({
-    ranAt: r.ran_at instanceof Date ? r.ran_at.toISOString() : String(r.ran_at),
-    checked: r.checked === null ? null : Number(r.checked),
-    stored: r.stored === null ? null : Number(r.stored),
-    inboxTotal: r.inbox_total === null ? null : Number(r.inbox_total),
-    durationMs: r.duration_ms === null ? null : Number(r.duration_ms),
-    error: r.error === null ? null : String(r.error),
-  }));
-}
-
-// -- Helpers --
-
-function nowChicago(): Date {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Chicago" }));
-}
-
-export function currentChicagoYear(): number {
-  return nowChicago().getFullYear();
-}
-
-function uid(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function rowToCall(row: Record<string, unknown>): Call {
-  return {
-    id:               String(row.id),
-    dispatchDatetime: row.dispatch_datetime instanceof Date
-      ? row.dispatch_datetime.toISOString()
-      : String(row.dispatch_datetime),
-    dispatchDate:     String(row.dispatch_date),
-    dispatchTime:     String(row.dispatch_time),
-    dispatchNature:   String(row.dispatch_nature),
-    sourceYear:       Number(row.source_year),
-    createdAt:        row.created_at instanceof Date
-      ? row.created_at.toISOString()
-      : String(row.created_at),
-  };
-}
-
-// -- Public API --
-
-export async function isDuplicate(gmailMessageId: string): Promise<boolean> {
-  await ensureSchema();
-  const db = sql();
-  const rows = await db`SELECT 1 FROM cad_calls WHERE gmail_message_id = ${gmailMessageId} LIMIT 1`;
-  return rows.length > 0;
-}
-
-export async function saveCall(data: {
+export interface NewCall {
   gmailMessageId: string;
   dispatchDatetime: string;
   dispatchDate: string;
   dispatchTime: string;
   dispatchNature: string;
   sourceYear: number;
-}): Promise<Call> {
-  await ensureSchema();
-  const db = sql();
-  const id = uid();
-  await db`
-    INSERT INTO cad_calls
-      (id, gmail_message_id, dispatch_datetime, dispatch_date, dispatch_time, dispatch_nature, source_year)
-    VALUES
-      (${id}, ${data.gmailMessageId}, ${data.dispatchDatetime}, ${data.dispatchDate},
-       ${data.dispatchTime}, ${data.dispatchNature}, ${data.sourceYear})
-    ON CONFLICT (gmail_message_id) DO NOTHING
-  `;
-  const rows = await db`SELECT * FROM cad_calls WHERE gmail_message_id = ${data.gmailMessageId}`;
-  return rowToCall(rows[0] as Record<string, unknown>);
+}
+
+interface PollRun {
+  checked?: number;
+  stored?: number;
+  inboxTotal?: number;
+  durationMs?: number;
+  error?: string;
+}
+
+async function query<T>(operation: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
+  const origin = process.env.CAD_STORE_URL;
+  const token = process.env.CAD_STORE_TOKEN;
+  if (!origin || !token) throw new Error("CAD_STORE_NOT_CONFIGURED");
+  let url: URL;
+  try {
+    url = new URL("/v1/query", origin);
+    if (url.protocol !== "https:" || url.username || url.password) throw new Error();
+  } catch {
+    throw new Error("CAD_STORE_URL_INVALID");
+  }
+  const timeout = AbortSignal.timeout(10_000);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ operation, ...params }),
+      cache: "no-store",
+      redirect: "error",
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+    });
+    if (!response.ok) throw new Error("CAD_STORE_UNAVAILABLE");
+    return await response.json() as T;
+  } catch {
+    // Never propagate request headers, credentials, response bodies, or raw URLs.
+    throw new Error("CAD_STORE_UNAVAILABLE");
+  }
+}
+
+export function currentChicagoYear(): number {
+  return Number(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago", year: "numeric",
+  }).format(new Date()));
+}
+
+export async function isDuplicate(gmailMessageId: string, signal?: AbortSignal): Promise<boolean> {
+  const result = await query<boolean>("duplicate", { gmailMessageId }, signal);
+  if (typeof result !== "boolean") throw new Error("CAD_STORE_INVALID_RESPONSE");
+  return result;
+}
+
+export async function saveCall(data: NewCall, signal?: AbortSignal): Promise<Call> {
+  const call = await query<Call>("saveCall", { data }, signal);
+  if (!call || typeof call.id !== "string") throw new Error("CAD_STORE_INVALID_RESPONSE");
+  invalidateCadPublicCache();
+  return call;
+}
+
+export async function getPublicCadSnapshot(year: number): Promise<PublicCadSnapshot> {
+  const snapshot = await query<PublicCadSnapshot>("snapshot", { year });
+  if (!snapshot || !Array.isArray(snapshot.latest) || !Number.isSafeInteger(snapshot.count)
+      || snapshot.count < 0 || snapshot.year !== year || typeof snapshot.updatedAt !== "string") {
+    throw new Error("CAD_STORE_INVALID_RESPONSE");
+  }
+  // Never infer that an annual total is complete during migration.
+  return { ...snapshot, countComplete: snapshot.countComplete === true };
 }
 
 export async function getLatestCalls(limit = 10): Promise<Call[]> {
-  await ensureSchema();
-  const db = sql();
-  const rows = await db`
-    SELECT * FROM cad_calls
-    ORDER BY dispatch_datetime DESC
-    LIMIT ${limit}
-  `;
-  return (rows as Record<string, unknown>[]).map(rowToCall);
+  return (await getPublicCadSnapshot(currentChicagoYear())).latest.slice(0, Math.min(10, Math.max(0, limit)));
+}
+
+export async function getCallsForYear(year: number): Promise<Call[]> {
+  const rows = await query<Call[]>("log", { year });
+  if (!Array.isArray(rows)) throw new Error("CAD_STORE_INVALID_RESPONSE");
+  return rows;
 }
 
 export async function getCallsForCurrentYear(): Promise<Call[]> {
-  await ensureSchema();
-  const db = sql();
-  const year = currentChicagoYear();
-  const rows = await db`
-    SELECT * FROM cad_calls
-    WHERE source_year = ${year}
-    ORDER BY dispatch_datetime DESC
-  `;
-  return (rows as Record<string, unknown>[]).map(rowToCall);
+  return getCallsForYear(currentChicagoYear());
 }
 
 export async function updateCallNature(callId: string, newNature: string): Promise<void> {
-  await ensureSchema();
-  const db = sql();
-  await db`UPDATE cad_calls SET dispatch_nature = ${newNature} WHERE id = ${callId}`;
+  await query("updateCallNature", { callId, newNature });
+  invalidateCadPublicCache();
 }
 
 export async function deleteCall(callId: string): Promise<void> {
-  await ensureSchema();
-  const db = sql();
-  await db`DELETE FROM cad_calls WHERE id = ${callId}`;
+  await query("deleteCall", { callId });
+  invalidateCadPublicCache();
+}
+
+export async function logPollRun(data: PollRun): Promise<void> {
+  try { await query("logPollRun", { data }); }
+  catch { console.error("CAD_POLL_HISTORY_WRITE_FAILED"); }
+}
+
+export async function getPollHistory(limit = 50): Promise<Array<{
+  ranAt: string; checked: number | null; stored: number | null;
+  inboxTotal: number | null; durationMs: number | null; error: string | null;
+}>> {
+  return query("pollHistory", { limit });
 }

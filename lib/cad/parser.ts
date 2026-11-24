@@ -30,7 +30,7 @@ export interface ParseFailure {
 export type ParseResult = ParsedCall | ParseFailure;
 
 function stripSubjectPrefixes(s: string): string {
-  return s.replace(/^(?:(?:fwd?|re|fw):\s*)+/i, "").trim();
+  return s.trim().replace(/^(?:(?:fwd?|re|fw):\s*)+/i, "").trim().replace(/\s+/g, " ");
 }
 
 /**
@@ -46,11 +46,12 @@ export function parseDispatchEmail(
   received: Date,
 ): ParseResult {
   const cleanSubject = stripSubjectPrefixes(subject);
-  if (cleanSubject !== "Chief Alert") {
-    return { status: "failed", reason: `Wrong subject: "${cleanSubject}"` };
+  if (cleanSubject.toLowerCase() !== "chief alert") {
+    return { status: "failed", reason: "Wrong subject" };
   }
 
-  const m = body.match(CAD_BODY_RE);
+  // Plain-text email can be folded across lines; retain the strict CAD fields.
+  const m = body.replace(/\s+/g, " ").trim().match(CAD_BODY_RE);
   if (!m) {
     return { status: "failed", reason: "Body does not match [NN Fire CAD] pattern" };
   }
@@ -59,23 +60,34 @@ export function parseDispatchEmail(
   if (!/\bVLHL\b/i.test(units)) {
     return { status: "failed", reason: "No VLHL unit in dispatch" };
   }
+  const dispatchNature = callType.trim();
+  if (!dispatchNature || dispatchNature.length > 160 || /[<>@\u0000-\u001f\u007f]/.test(dispatchNature)) {
+    return { status: "failed", reason: "Invalid dispatch nature" };
+  }
 
-  // Build Chicago-local date/time strings from the received date.
-  const chicagoStr = received.toLocaleString("en-US", {
+  if (!Number.isFinite(received.getTime())) {
+    return { status: "failed", reason: "Invalid received timestamp" };
+  }
+
+  // formatToParts avoids locale punctuation assumptions and hour 24 at midnight.
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
     year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  });
-  const parts = chicagoStr.match(/(\d{2})\/(\d{2})\/(\d{4}),?\s+(\d{2}):(\d{2})/);
-  const dispatchDate = parts ? `${parts[1]}/${parts[2]}/${parts[3]}` : received.toLocaleDateString("en-US");
-  const dispatchTime = parts ? `${parts[4]}:${parts[5]}` : received.toLocaleTimeString("en-US");
-  const sourceYear = parts ? Number(parts[3]) : new Date().getFullYear();
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(received);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)!.value;
+  const dispatchDate = `${part("month")}/${part("day")}/${part("year")}`;
+  const dispatchTime = `${part("hour")}:${part("minute")}`;
+  const sourceYear = Number(part("year"));
+  if (sourceYear < 1900 || sourceYear > 2200) {
+    return { status: "failed", reason: "Invalid received timestamp" };
+  }
 
   return {
     status: "ok",
     dispatchDate,
     dispatchTime,
-    dispatchNature: callType.trim(),
+    dispatchNature,
     dispatchDatetime: received.toISOString(),
     sourceYear,
   };
