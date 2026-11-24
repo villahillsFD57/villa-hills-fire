@@ -10,6 +10,7 @@ export interface RecoveryWindow {
   start: string;
   end: string;
   pageToken?: string;
+  includeSpamTrash?: boolean;
 }
 
 export interface RecoveryPage {
@@ -61,6 +62,7 @@ export async function fetchRecoveryPage(window: RecoveryWindow, signal?: AbortSi
     list = await gmail.users.messages.list({
       userId, q: query, maxResults: PAGE_SIZE,
       ...(window.pageToken ? { pageToken: window.pageToken } : {}),
+      ...(window.includeSpamTrash === true ? { includeSpamTrash: true } : {}),
     }, options);
   } catch (error) {
     throw new Error(requestErrorCode(error));

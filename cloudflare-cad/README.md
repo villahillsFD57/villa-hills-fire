@@ -16,6 +16,8 @@ The Worker does not run schema creation on requests. A missing binding/schema or
 
 The schedule targets only `https://www.villahillsfd.org/api/cad-poll`. It does not depend on the previous external scheduler. Set `CAD_POLL_ENABLED` to `false` to pause ingestion without disabling stored-call reads. If `CRON_SECRET` is added to Vercel later, synchronize it with the Worker token before the next scheduled run.
 
+Production verification on November 24, 2026 confirmed three consecutive unattended scheduled invocations at 04:09:15, 04:10:15, and 04:11:14 UTC. Cloudflare recorded `CAD_SCHEDULED_POLL`; the inspected 04:11 invocation returned HTTP 200 with event type `scheduled` and the every-minute cron trigger. The verified Worker version was `624c5b7e-98f8-481c-9397-1b7fa65e5f72`.
+
 ## Protocol
 
 Use `POST /v1/query` with `Authorization: Bearer <CAD_API_TOKEN>` and `Content-Type: application/json`. Input is `{ "operation": "...", ...parameters }`. The maximum request body is 16 KiB. Success responses contain the raw JSON value shown below, without an envelope.
@@ -43,10 +45,12 @@ Gmail message identifiers and call IDs permit letters, digits, underscores and h
 
 New databases are incomplete: `snapshot.countComplete` is **false** unless D1 metadata explicitly contains key `count_complete:<year>` with value `true`. There is no metadata-writing API. Keep the public count labeled incomplete during migration/backfill. After a year's historical records are imported and reconciled, an administrator can set that metadata value with a reviewed D1 SQL migration. Changing metadata does not import any records.
 
+The retained 2026 Gmail source was reconciled on November 24, 2026: 53 eligible dispatches matched all 53 public-log entries, with zero missing or extra records, and D1 held 53 unique Gmail IDs. Reviewed completeness and source-audit metadata were recorded, then the `cad-public` cache tag was invalidated. The public summary returned count 53 with `countComplete: true`. See `../scripts/README.md` for the repeatable inventory and reconciliation tooling. This establishes the retained-mail source count; it does not claim that the inaccessible Neon archive or deleted mail was migrated.
+
 Snapshot includes the ten most recent calls across years; its count and annual log use only the requested year. `updatedAt` indicates the snapshot read time, not the last Gmail poll time.
 
 ## Verification
 
 Run `node --test cloudflare-cad/tests.mjs` with Node 24. The tests use Node's real SQLite engine with a D1-compatible adapter, exercising the actual schema and Worker HTTP handler. No credentials or network access are needed.
 
-Restore the historical call records separately after the paused Neon database is available. The Worker does not retrieve or erase Neon data, and deployment does not reset the existing database.
+The previous Neon database remains untouched. If it becomes available, reconcile any additional historical records against the recovered Gmail IDs before importing them. The Worker does not retrieve or erase Neon data, and deployment does not reset the existing database.
