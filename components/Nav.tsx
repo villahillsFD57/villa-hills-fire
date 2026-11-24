@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { DONATIONS_ENABLED } from "@/lib/site-config";
 
 const NAV_LINKS = [
   { href: "/about",       label: "About" },
@@ -82,11 +83,11 @@ export default function Nav() {
                 </Link>
               );
             })}
-            <a href="https://www.paypal.com/ncp/payment/NGKV77KLSMDH4" target="_blank" rel="noopener noreferrer"
+            {DONATIONS_ENABLED && <a href="https://www.paypal.com/ncp/payment/NGKV77KLSMDH4" target="_blank" rel="noopener noreferrer"
               style={{ fontFamily: "var(--font-display)", fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.18em", textTransform: "uppercase", color: "#8B0000", transition: "color 0.2s ease" }}
               onMouseEnter={e => (e.currentTarget.style.color = "#cc0000")}
               onMouseLeave={e => (e.currentTarget.style.color = "#8B0000")}
-            >Donate Now</a>
+            >Donate Now</a>}
           </nav>
         </div>
 
@@ -120,7 +121,7 @@ export default function Nav() {
                 </Link>
               );
             })}
-            <div className="pt-4">
+            {DONATIONS_ENABLED && <div className="pt-4">
               <a
                 href="https://www.paypal.com/ncp/payment/NGKV77KLSMDH4"
                 target="_blank"
@@ -129,7 +130,7 @@ export default function Nav() {
               >
                 Donate Now
               </a>
-            </div>
+            </div>}
           </nav>
         </div>
       </header>
@@ -185,6 +186,7 @@ function MobileBottomNav({
       href: "https://www.paypal.com/ncp/payment/NGKV77KLSMDH4",
       label: "Donate",
       external: true,
+      donation: true,
       icon: (
         <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current" aria-hidden>
           <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
@@ -207,7 +209,7 @@ function MobileBottomNav({
           className="flex items-stretch"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
-          {tabs.map((tab) =>
+          {tabs.filter((tab) => DONATIONS_ENABLED || !tab.donation).map((tab) =>
             tab.external ? (
               <a
                 key={tab.label}

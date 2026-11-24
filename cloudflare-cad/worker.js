@@ -246,7 +246,7 @@ export default {
       const response = await fetch("https://www.villahillsfd.org/api/cad-poll", {
         method: "POST",
         headers: { Authorization: `Bearer ${secret}` },
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(55_000),
       });
       if (response.ok) console.info("CAD_SCHEDULED_POLL", { status: response.status });

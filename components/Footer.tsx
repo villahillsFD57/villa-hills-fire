@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { DONATIONS_ENABLED } from "@/lib/site-config";
 
 const NAV = [
   { label: "Home",           href: "/" },
@@ -59,6 +60,7 @@ export default function Footer() {
             100% volunteer. ISO Class 4. Protecting Villa Hills and the unincorporated areas
             of St. Clair County since 1955.
           </p>
+          {DONATIONS_ENABLED && <>
           <div className="w-8 h-px mb-6" style={{ background: "#8B0000" }} />
           <a
             href="https://www.paypal.com/ncp/payment/NGKV77KLSMDH4"
@@ -69,6 +71,7 @@ export default function Footer() {
           >
             Donate Now
           </a>
+          </>}
         </div>
 
         {/* NAV */}

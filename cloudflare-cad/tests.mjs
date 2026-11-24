@@ -200,7 +200,7 @@ test("enabled scheduler posts only to the fixed poll endpoint with bounded timeo
     assert.equal(url, "https://www.villahillsfd.org/api/cad-poll");
     assert.equal(options.method, "POST");
     assert.equal(new Headers(options.headers).get("authorization"), `Bearer ${TOKEN}`);
-    assert.equal(options.redirect, "error");
+    assert.equal(options.redirect, "manual");
     assert.equal(options.signal, signal);
     return {
       ok: true, status: 200,
@@ -253,4 +253,24 @@ test("scheduler rejects missing and invalid secrets without network or database 
   assert.deepEqual(error.mock.calls.map(call => call.arguments), invalidTokens.map(() => [
     "CAD_SCHEDULED_POLL_FAILED", { code: "CONFIGURATION_ERROR" },
   ]));
+});
+
+
+test("scheduler treats redirects as failures and never forwards the bearer token", async t => {
+  const fetchMock = t.mock.method(globalThis, "fetch", async (url, options) => {
+    assert.equal(url, "https://www.villahillsfd.org/api/cad-poll");
+    assert.equal(options.redirect, "manual");
+    return {
+      ok: false, status: 302,
+      headers: new Headers({ Location: "https://untrusted.example.test/redirect" }),
+      text() { assert.fail("Redirect response body must not be read"); },
+      json() { assert.fail("Redirect response JSON must not be read"); },
+    };
+  });
+  const info = t.mock.method(console, "info", () => {});
+  const error = t.mock.method(console, "error", () => {});
+  await worker.scheduled({}, scheduledEnvironment());
+  assert.equal(fetchMock.mock.callCount(), 1, "No request may be made to the redirect destination");
+  assert.equal(info.mock.callCount(), 0);
+  assert.deepEqual(error.mock.calls.map(call => call.arguments), [["CAD_SCHEDULED_POLL_FAILED", { status: 302 }]]);
 });

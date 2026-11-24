@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import HeroCarousel from "@/components/HeroCarousel";
+import { DONATIONS_ENABLED } from "@/lib/site-config";
 
 /* ─────────────────────────────────────────────────────────────────────────
    VILLA HILLS FIRE DEPARTMENT — HOMEPAGE
@@ -409,6 +410,7 @@ export default function Home() {
       {/* ══════════════════════════════════════════════════════════════
           SUPPORT / FUNDRAISING — Strong callout, full bleed
       ══════════════════════════════════════════════════════════════ */}
+      {DONATIONS_ENABLED && (
       <section
         className="relative overflow-hidden"
         style={{
@@ -483,6 +485,7 @@ export default function Home() {
           </div>
         </div>
       </section>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════
           COMMUNITY ENGAGEMENT — Human, not corporate

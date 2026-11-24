@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
+import { DONATIONS_ENABLED } from "@/lib/site-config";
 
 export const metadata: Metadata = {
   title: "Fundraising",
-  description: "Support Villa Hills Fire Department — your donations fund equipment, training, and the resources that protect St. Clair County, Illinois.",
+  description: DONATIONS_ENABLED
+    ? "Support Villa Hills Fire Department — your donations fund equipment, training, and the resources that protect St. Clair County, Illinois."
+    : "Explore Villa Hills Fire Department fundraising and raffles supporting equipment, training, and community readiness in St. Clair County, Illinois.",
 };
 
 export default function FundraisingPage() {
@@ -72,20 +75,20 @@ export default function FundraisingPage() {
                 style={{ fontFamily: "var(--font-body)", color: "#d1d5db" }}
               >
                 <p>
-                  Villa Hills Fire Department is funded by our community. Donations directly
-                  support the equipment, training, and operational resources that allow us to
-                  respond effectively — every time the tones drop.
+                  {DONATIONS_ENABLED
+                    ? "Villa Hills Fire Department is funded by our community. Donations directly support the equipment, training, and operational resources that allow us to respond effectively — every time the tones drop."
+                    : "Community fundraising supports the equipment, training, and operational resources that allow Villa Hills Fire Department to respond effectively — every time the tones drop."}
                 </p>
                 <p>
                   From purchasing new apparatus to maintaining gear that firefighters depend on
                   with their lives, community financial support is the backbone of everything we do.
                 </p>
-                <p>
+                {DONATIONS_ENABLED && <p>
                   When you donate to Villa Hills Fire Department, you are investing in the safety
                   of every family in St. Clair County.
-                </p>
+                </p>}
               </div>
-              <a
+              {DONATIONS_ENABLED && <a
                 href="https://www.paypal.com/ncp/payment/NGKV77KLSMDH4"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -95,7 +98,7 @@ export default function FundraisingPage() {
                 <svg viewBox="0 0 20 20" className="w-4 h-4 fill-current">
                   <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
                 </svg>
-              </a>
+              </a>}
             </div>
 
             {/* Fleet photo + stats */}
@@ -153,10 +156,9 @@ export default function FundraisingPage() {
             className="mb-14 max-w-2xl"
             style={{ fontFamily: "var(--font-body)", color: "#d1d5db", lineHeight: 1.8, fontSize: "0.95rem" }}
           >
-            Villa Hills Fire Department is built on service, readiness, and community support.
-            Contributions help strengthen the tools, training, and operational readiness that allow
-            our volunteer members to answer the call when it matters most. Needs may shift over time,
-            but every dollar supports the mission of protecting life and property.
+            {DONATIONS_ENABLED
+              ? "Villa Hills Fire Department is built on service, readiness, and community support. Contributions help strengthen the tools, training, and operational readiness that allow our volunteer members to answer the call when it matters most. Needs may shift over time, but every dollar supports the mission of protecting life and property."
+              : "Villa Hills Fire Department is built on service, readiness, and community support. Fundraising helps strengthen the tools, training, and operational readiness that allow our volunteer members to answer the call when it matters most."}
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-px" style={{ background: "rgba(139,0,0,0.15)" }}>
@@ -211,9 +213,9 @@ export default function FundraisingPage() {
         </div>
       </section>
 
-      {/* DONATE SECTION — anchor target */}
+      {/* Raffle ticket sales stay available while donations are paused. */}
       <section
-        id="donate"
+        id={DONATIONS_ENABLED ? "donate" : "raffle-tickets"}
         style={{
           background: "#111111",
           borderTop: "1px solid rgba(139,0,0,0.2)",
@@ -222,6 +224,7 @@ export default function FundraisingPage() {
         }}
       >
         <div className="wrap max-w-2xl">
+          {DONATIONS_ENABLED ? <>
           <p className="section-label mb-6">Make a Difference</p>
           <h2 className="heading-lg mb-6">
             Support
@@ -235,10 +238,11 @@ export default function FundraisingPage() {
             Ready to donate? Contact the department directly or use the options below.
             Every contribution — of any size — makes a direct impact on our ability to serve.
           </p>
+          </> : <h2 className="heading-lg mb-10">Raffle Tickets</h2>}
 
           {/* PayPal options */}
           <div className="flex flex-col gap-4 mb-8">
-            <a
+            {DONATIONS_ENABLED && <a
               href="https://www.paypal.com/ncp/payment/NGKV77KLSMDH4"
               target="_blank"
               rel="noopener noreferrer"
@@ -246,7 +250,7 @@ export default function FundraisingPage() {
               style={{ fontSize: "1rem", padding: "1rem 2.5rem" }}
             >
               Donate Now — Any Amount
-            </a>
+            </a>}
             <a
               href="https://www.paypal.com/ncp/payment/YFDSAQ6GNCCS4"
               target="_blank"
