@@ -159,7 +159,7 @@ export default function RafflePage() {
               className="text-sm mb-10 max-w-md mx-auto"
               style={{ fontFamily: "var(--font-body)", color: "#9ca3af", lineHeight: 1.8 }}
             >
-              Tickets are $10.87 each. All proceeds go directly to supporting the Villa Hills Fire Department.
+              All proceeds go directly to supporting the Villa Hills Fire Department.
             </p>
             <a
               href="https://www.paypal.com/ncp/payment/YFDSAQ6GNCCS4"
